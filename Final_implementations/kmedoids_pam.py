@@ -196,7 +196,7 @@ if __name__ == "__main__":
     
     # -------------------------- Start iterating until convergence ---------------------- #
     # Maximum number of iterations to stop after 
-    maxIteration = 500
+    max_iteration = 500
     # Number of iterations taken for the algorithm to converge
     numIter = 0
     # The best min loss found so far over all the iterations
@@ -204,7 +204,7 @@ if __name__ == "__main__":
     # This will later have the best medoids that output the minimum min loss 
     best_medoids = k_medoids_set.copy()
     
-    for _ in range(maxIteration):
+    for _ in range(max_iteration):
         t0 = time.time()
 
         numIter +=1

@@ -234,7 +234,7 @@ if __name__ == "__main__":
  
     # -------------------------- Start iterating until convergence ---------------------- #
     # Maximum number of iterations to stop after 
-    maxIteration = 5
+    max_iteration = 5
     # Number of iterations taken for the algorithm to converge
     numIter = 0
     # This will have the total removal loss value over the iterations
@@ -243,7 +243,7 @@ if __name__ == "__main__":
     medoids_values_considered = []
     # k_medoids_set = { 5, 7 }
 
-    for _ in range(maxIteration):
+    for _ in range(max_iteration):
         t0 = time.time()
 
         numIter +=1
