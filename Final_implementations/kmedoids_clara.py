@@ -4,7 +4,7 @@ from pyspark.sql import SparkSession
 from pyspark.context import SparkContext
 from pyspark.ml.feature import VectorAssembler, PCA
 from pyspark.sql.types import FloatType
-from pyspark.sql.functions import col,split,monotonically_increasing_id , broadcast
+from pyspark.sql.functions import udf , col,split,monotonically_increasing_id , broadcast
 import numpy as np
 from numpy.linalg import norm
 from pyspark.sql.functions import col
@@ -28,18 +28,6 @@ def  get_cosine_similarity_given_norms(XNorm, YNorm, dot ):
         return -1.0
     else:
         return float(dot / float(denom))
-
-# Return the distance between the vectors based on the cosine similarity
-def get_pair_wise_distance(embeddings_df ):
-    # Join the embeddings_df to itself to create a all to all mapping of each embeddings. 
-    all_to_all_df = embeddings_df.alias("i").join(embeddings_df.alias("j"))
-    # Add the column "dot" which is the dot product between the the features vector for each pair
-    all_to_all_dot_df = all_to_all_df.select("*",udf_dot_product("i.features", "j.features").alias("dot"))
-    # Add the column "dist" which is 1 - cosine similarity calculated from the norm and dot 
-    all_to_all_dist_df = all_to_all_dot_df.withColumn("dist",1 - udf_get_cos_sim("i.norm", "j.norm","dot"))
-    # Select only the required columns, ids and the distance based  
-    all_to_all_dist_df = all_to_all_dist_df.select( col("i.row_id").alias("i"),col("j.row_id").alias("j") , "dist")
-    return all_to_all_dist_df     
 
 
 #  
@@ -154,17 +142,40 @@ def get_cos_sim(row):
         cos_sim = float( dot / float(denom))
     return (i , j , 1 - cos_sim)
 
-def get_pair_wise_distance_rdd(embeddings_df):
-        embeddings_rdd = embeddings_df.rdd
-        pair_wise_rdd = embeddings_rdd.cartesian(embeddings_rdd)
+# def get_pair_wise_distance_rdd(embeddings_df):
+#         embeddings_rdd = embeddings_df.rdd
+#         pair_wise_rdd = embeddings_rdd.cartesian(embeddings_rdd)
 
-        pair_wise_distance_rdd = pair_wise_rdd.map(lambda row: get_cos_sim(row) )
-        # pair_wise_distance_rdd = pair_wise_distance_rdd.map(lambda row: ( row[0] , row[1] , row[]) )
-        return pair_wise_distance_rdd
+#         pair_wise_distance_rdd = pair_wise_rdd.map(lambda row: get_cos_sim(row) )
+#         # pair_wise_distance_rdd = pair_wise_distance_rdd.map(lambda row: ( row[0] , row[1] , row[]) )
+#         return pair_wise_distance_rdd
+def add_dist_from_cos_sim(row):
+    f1 = row[0]
+    f2 = row[3]
+    n1 = row[2]
+    n2 = row[5]
+    i = row[1]
+    j = row[4]
+    dot = float(f1.dot(f2))
+    denom = n1 * n2
+    cos_sim = -1
+    if denom != 0.0:
+        cos_sim = float( dot / float(denom))
+    return (i , j , 1 - cos_sim)  
+
+def get_pair_wise_distance_rdd(embeddings_df):
+
+    broadcast_embeddings_df = broadcast(embeddings_df)
+    pair_wise_df = embeddings_df.crossJoin(broadcast_embeddings_df)
+
+    # pair_wise_df.show()
+    pair_wise_rdd = pair_wise_df.rdd
+    pair_wise_distance_rdd = pair_wise_rdd.map(lambda row: add_dist_from_cos_sim(row) )
+    # pair_wise_distance_rdd = pair_wise_distance_rdd.map(lambda row: ( row[0] , row[1] , row[]) )
+    return pair_wise_distance_rdd
     
 def get_best_medoids_fast_pam(embeddings_df , k_medoids_set_passed):
     k_medoids_set = k_medoids_set_passed.copy()
-    # k_medoids_set ={25769803777, 4, 8589934602, 8589934604, 8589934605, 25769803790, 25769803791, 20, 25769803796, 8589934613, 8589934615, 24, 8589934619, 25769803807, 25769803809, 35, 8589934633, 25769803817, 34359738409, 17179869227, 34359738413, 8589934639, 52, 34359738422, 17179869239, 17179869240, 57, 8589934647, 25769803835, 34359738423, 25769803837, 25769803841, 25769803843, 8589934664, 73, 8589934666, 34359738443, 8589934667, 25769803853, 8589934669, 75, 8589934672, 17179869264, 17179869261, 17179869267, 86, 8589934678, 88, 17179869273, 34359738461, 17179869280, 25769803872, 98, 25769803875, 8589934691, 17179869282, 17179869286, 8589934697, 34359738474, 25769803883, 25769803886, 34359738486, 34359738492, 133, 8589934727, 17179869324, 25769803919, 144, 147, 149, 25769803931, 25769803934, 158, 8589934751, 25769803937, 8589934754, 17179869348, 17179869352, 25769803945, 169, 25769803953, 25769803957, 17179869367, 25769803960, 17179869371, 8589934780, 188, 17179869372, 17179869373, 17179869376, 8589934783, 25769803972, 17179869380, 17179869384, 8589934794, 25769803981, 25769803982, 25769803984, 25769803985, 213}
     #---------------------------  Create the pair wise distance matrix --------------------------- #
     # This is the most expensive operation in the algorithm.
     # It basically cross joins the dataframe on itself to create a single dataframe that has the distances between each row and the other
@@ -257,21 +268,17 @@ def get_best_medoids_fast_pam(embeddings_df , k_medoids_set_passed):
     
         t1 = time.time()
         print(" current removal loss :- ",  final_value[1][1])
-        # print(" current medodis :- ", k_medoids_set)
 
-        print("total time for iteration " , numIter , " is :", t1 - t0)
+        print("total time for fastPAM iteration " , numIter , " is :", t1 - t0)
 
     
     print("Total number of iterations needed for convergence :- " , numIter)
     print("The removal loss updates till convergence :- " , removal_loss_values)
-    print("The medoids update till convergence :- ", medoids_values_considered)
-    print("The final selected medoids :- ",  k_medoids_set)
+    # print("The medoids update till convergence :- ", medoids_values_considered)
+    # print("The final selected medoids :- ",  k_medoids_set)
     pair_wise_distance_rdd.unpersist()
     return k_medoids_set
-    # Get the total loss for the best selected medoids 
-    # assignment_rdd = medoids_assignment_rdd(pair_wise_distance_rdd, k_medoids_set)
-    # loss_value =  get_loss_rdd(assignment_rdd) 
-    # print("final total loss for the selected medoids  :- ", loss_value)
+ 
     
 
 
@@ -284,7 +291,7 @@ def total_loss_from_medoids_assignments(embeddings_df , k_medoids_set, k_medoids
     embeddings_df_without_medoids_df = embeddings_df.filter(~col('row_id').isin(list(k_medoids_set)))
     joined_df = embeddings_df_without_medoids_df.crossJoin(broadcast(k_medoids_df)) 
     joined_rdd = joined_df.rdd
-    pair_wise_distance_rdd_internal = joined_rdd.map(lambda row: get_cos_sim(row) )
+    pair_wise_distance_rdd_internal = joined_rdd.map(lambda row: add_dist_from_cos_sim(row) )
     pair_wise_distance_rdd_internal = pair_wise_distance_rdd_internal.keyBy(lambda row: (row[0]))
     assignment_rdd = medoids_assignment_rdd(pair_wise_distance_rdd_internal, k_medoids_set)
     loss_value =  get_loss_rdd(assignment_rdd) 
@@ -293,10 +300,11 @@ def total_loss_from_medoids_assignments(embeddings_df , k_medoids_set, k_medoids
   
     
 if __name__ == "__main__":
+    start_time = time.time()
     # ---------------------------- Initializations ------------------------------- #
     spark = SparkSession.builder.appName("kmedoids").getOrCreate()
     sc = SparkContext.getOrCreate()
-    k = 10
+    k = 2
     originalN = 1000
     filePath = "embeddings/input/1000_sampled_embeddings.csv"
     sampledN =  40 + (2*(k)) 
@@ -305,9 +313,8 @@ if __name__ == "__main__":
         
     
     #--------------------------- UDFS ----------------------------------------#
-    udf_get_cos_sim = F.udf(get_cosine_similarity_given_norms, FloatType())
-    udf_get_norm = F.udf(get_norm, FloatType())
-    udf_dot_product = F.udf(lambda x,y: float(x.dot(y)), FloatType())
+    udf_get_norm = udf(get_norm, FloatType())
+    udf_dot_product = udf(lambda x,y: float(x.dot(y)), FloatType())
 
     # --------------------------- Cleaning and formatting --------------------- #
     # This function will read the data from the file and return a dataframe in the following format
@@ -343,25 +350,33 @@ if __name__ == "__main__":
     # k_medoids_list = k_means_init(pair_wise_distance_df,embeddings_ids_list, k)
     
     k_medoids_set = {medoid for medoid in k_medoids_list}
-    print(k_medoids_set)
+    # print(k_medoids_set)
     # --------------------------- Sampling iterations ------------------------------
-    max_sampling_iterations = 5
+    max_sampling_iterations = originalN // sampledN
     min_total_loss = sys.maxsize
     best_medoids = k_medoids_set.copy()
+    still_same_counter = 0
     for i in range(max_sampling_iterations):
+        print("Sample iteration number " , i )
+        t0 = time.time()
         new_k_medoids_set = get_best_medoids_fast_pam(embeddings_df , k_medoids_set)
         k_medoids_set = new_k_medoids_set.copy()
         k_medoids_df = original_embeddings_df.filter(col('row_id').isin(list(k_medoids_set)))
         total_loss = total_loss_from_medoids_assignments(original_embeddings_df ,k_medoids_set, k_medoids_df)
-
-        print("final total loss for the selected medoids  :- ", total_loss)
         if(total_loss < min_total_loss):
+            print("---------------------------------------------------------")
+            print("New total loss for the selected medoids  :- ", total_loss , " - time :- " , time.time()-start_time)
+            print("---------------------------------------------------------")
             min_total_loss = total_loss
             best_medoids = k_medoids_set.copy()
+            still_same_counter = 0
+        else:
+            k_medoids_set = best_medoids.copy()
+            still_same_counter +=1 
+            print("The current medoids have been selected as minimum for " , still_same_counter , " sample iterations")
         # Sample again the embeddings
         embeddings_df = original_embeddings_df.sample(fraction=sampleFraction).limit(sampledN)
-        embeddings_df.show()
-
+    
         # remove the current k_medoids from the set to add them once later
         embeddings_df = embeddings_df.filter(~col('row_id').isin(list(k_medoids_set)))
         embeddings_without_medoids_count = embeddings_df.count()
@@ -375,13 +390,10 @@ if __name__ == "__main__":
             embeddings_df = embeddings_df.limit(embeddings_without_medoids_count - to_be_removed)
 
             
-        print(embeddings_df.count())
-        print("----2222322********************************")
-        k_medoids_df.show()
-        print(k_medoids_df.count())
-        print("----33333333333333********************************")
+    
         # Update the embeddings df wit the medoids and the new embeddings sampled to be used in the next iteration
         embeddings_df = embeddings_df.union(k_medoids_df)
-        print(embeddings_df.count())
-        print("----4444444********************************")
-        print("Finished sampling iterations number :- " , i)
+        t1 = time.time()
+        print("Time for one sample iteration Nr. " , i , " / " ,max_sampling_iterations, " is :- " , t1-t0 )
+    
+    print(" Final total loss :- ", min_total_loss)
