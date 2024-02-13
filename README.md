@@ -35,3 +35,6 @@ Then runs FastPAM on each subsets, for each iteration,
 *  Run FastPAM again on the new sample. 
 
 You can control how many samples to control from `max_sampling_iterations` 
+
+Check the slides for more details about the experiment results 
+https://docs.google.com/presentation/d/1EPwSdJGdXQaaR4-Y9d1_zeegSuYqhxrtEstJt8Rb530/edit#slide=id.g299ff4c4a49_0_50
